@@ -71,6 +71,8 @@ sp <- function(p) {
            modeBarButtonsToRemove = c("lasso2d", "select2d", "autoScale2d"))
 }
 
+ALPHA <- 0.05   # taraf nyata untuk seluruh uji
+
 kpi_row <- function(prefix) {
   fluidRow(
     valueBoxOutput(paste0(prefix, "_k1"), width = 3),
@@ -594,15 +596,27 @@ ui <- dashboardPage(
           ),
           tabPanel("Uji Asumsi",
             fluidRow(
-              box(title = "Residual vs Fitted", status = "primary", solidHeader = TRUE,
-                  width = 6, plotlyOutput("reg_rf", height = 340)),
-              box(title = "Q-Q Plot Residual", status = "primary", solidHeader = TRUE,
-                  width = 6, plotlyOutput("reg_qq", height = 340))),
+              box(title = "Ringkasan Uji Asumsi (taraf nyata alpha = 0.05)", status = "primary",
+                  solidHeader = TRUE, width = 12, DTOutput("reg_asm_tbl"))),
             fluidRow(
-              box(title = "Multikolinearitas (VIF) & Uji Breusch-Pagan", status = "primary",
-                  solidHeader = TRUE, width = 5, tableOutput("reg_vif"), uiOutput("reg_bp")),
-              box(title = "Interpretasi Asumsi", status = "success", solidHeader = TRUE,
-                  width = 7, uiOutput("reg_asm_text")))
+              box(title = "Normal Probability Plot Residual", status = "primary",
+                  solidHeader = TRUE, width = 6, plotlyOutput("reg_qq", height = 360)),
+              box(title = "Residual vs Fitted (linearitas & homoskedastisitas)", status = "primary",
+                  solidHeader = TRUE, width = 6, plotlyOutput("reg_rf", height = 360))),
+            fluidRow(
+              box(title = "ACF Residual (autokorelasi)", status = "primary",
+                  solidHeader = TRUE, width = 6, plotlyOutput("reg_acf", height = 360)),
+              box(title = "Observasi vs Residual (heteroskedastisitas)", status = "primary",
+                  solidHeader = TRUE, width = 6, plotlyOutput("reg_obs", height = 360))),
+            fluidRow(
+              box(title = "Plot Diagnostik Model", status = "primary",
+                  solidHeader = TRUE, width = 12, plotOutput("reg_diag", height = 640))),
+            fluidRow(
+              box(title = "Multikolinearitas (VIF)", status = "primary",
+                  solidHeader = TRUE, width = 4, tableOutput("reg_vif"),
+                  helpText("Acuan: VIF < 5 aman, 5-10 moderat, > 10 serius.")),
+              box(title = "Interpretasi Uji Asumsi", status = "success", solidHeader = TRUE,
+                  width = 8, uiOutput("reg_asm_text")))
           ),
           tabPanel("Visualisasi Hasil Model",
             fluidRow(
@@ -1324,7 +1338,7 @@ server <- function(input, output, session) {
                   hoverinfo = "text") %>%
       add_lines(x = range(th), y = int + slope * range(th),
                 line = list(color = PAL$rose, dash = "dash"), hoverinfo = "none") %>%
-      layout(title = list(text = "<b>Q-Q Plot Residual</b>"),
+      layout(title = list(text = "<b>Normal Probability Plot Residual</b>"),
              xaxis = list(title = "Kuantil teoretis"), yaxis = list(title = "Kuantil residual"),
              showlegend = FALSE) %>%
       sp()
@@ -1339,29 +1353,115 @@ server <- function(input, output, session) {
     list(stat = stat, df = ncol(X), p = pchisq(stat, ncol(X), lower.tail = FALSE))
   })
 
-  output$reg_bp <- renderUI({
+  # ---------- uji asumsi (alpha = 0.05) ----------
+  asm <- reactive({
+    m <- fit(); e <- resid(m); n <- length(e)
+    set.seed(123)
+    sw <- shapiro.test(if (n > 5000) sample(e, 5000) else e)
+    jb <- n / 6 * (skew(e)^2 + kurt(e)^2 / 4)
+    pjb <- pchisq(jb, 2, lower.tail = FALSE)
+    lb <- Box.test(e, lag = 10, type = "Ljung-Box")
+    dw <- sum(diff(e)^2) / sum(e^2)
     b <- bp_res()
-    HTML(sprintf("<b>Uji Breusch-Pagan</b> (homoskedastisitas): LM = %s, db = %d, nilai-p %s.",
-                 fm(b$stat, 2), b$df, fp(b$p)))
+    v <- vif_manual(m); vmax <- if (is.null(v)) NA_real_ else max(v$VIF)
+    list(n = n, sw = sw, jb = jb, pjb = pjb, lb = lb, dw = dw, bp = b, vmax = vmax)
+  })
+
+  output$reg_asm_tbl <- renderDT({
+    a <- asm()
+    ok  <- function(p) if (p >= ALPHA) "Gagal tolak H0 : asumsi terpenuhi" else "Tolak H0 : asumsi tidak terpenuhi"
+    tb <- data.frame(
+      Asumsi = c("Normalitas residual", "Normalitas residual", "Non-autokorelasi",
+                 "Homoskedastisitas", "Non-multikolinearitas"),
+      Uji = c(paste0("Shapiro-Wilk", if (a$n > 5000) " (sampel 5.000)" else ""),
+              "Jarque-Bera", "Ljung-Box (lag 10)", "Breusch-Pagan", "VIF maksimum"),
+      H0 = c("Residual berdistribusi normal", "Residual berdistribusi normal",
+             "Tidak ada autokorelasi residual", "Ragam residual homogen",
+             "VIF < 10 (tidak ada multikolinearitas serius)"),
+      Statistik = c(fm(unname(a$sw$statistic), 4), fm(a$jb, 2), fm(unname(a$lb$statistic), 2),
+                    fm(a$bp$stat, 2), if (is.na(a$vmax)) "-" else fm(a$vmax, 2)),
+      Nilai_p = c(fp(a$sw$p.value), fp(a$pjb), fp(a$lb$p.value), fp(a$bp$p), "-"),
+      Keputusan = c(ok(a$sw$p.value), ok(a$pjb), ok(a$lb$p.value), ok(a$bp$p),
+                    if (is.na(a$vmax)) "-" else if (a$vmax < 10) "Gagal tolak H0 : asumsi terpenuhi" else "Tolak H0 : asumsi tidak terpenuhi"))
+    datatable(tb, rownames = FALSE, options = list(dom = "t", scrollX = TRUE, pageLength = 10)) %>%
+      formatStyle("Keputusan",
+                  color = styleEqual(c("Gagal tolak H0 : asumsi terpenuhi", "Tolak H0 : asumsi tidak terpenuhi"),
+                                     c(PAL$darkgreen, PAL$deeprose)),
+                  fontWeight = "bold")
+  })
+
+  output$reg_acf <- renderPlotly({
+    e <- resid(fit()); n <- length(e)
+    a <- acf(e, lag.max = 30, plot = FALSE)
+    df <- data.frame(lag = as.numeric(a$lag)[-1], acf = as.numeric(a$acf)[-1])
+    ci <- qnorm(1 - ALPHA / 2) / sqrt(n)
+    df$txt <- paste0("Lag: ", df$lag, "<br>ACF: ", fm(df$acf, 4),
+                     "<br>", ifelse(abs(df$acf) > ci, "Di luar batas kepercayaan", "Di dalam batas kepercayaan"))
+    p <- ggplot(df, aes(lag, acf, text = txt)) +
+      geom_col(width = 0.3, fill = PAL$blue) +
+      geom_hline(yintercept = 0, color = PAL$navy) +
+      geom_hline(yintercept = c(-ci, ci), color = PAL$rose, linetype = "dashed") +
+      labs(title = "ACF Residual", subtitle = "Garis putus-putus = batas kepercayaan 95%",
+           x = "Lag", y = "Autokorelasi") +
+      theme_dash()
+    sp(ggplotly(p, tooltip = "text"))
+  })
+
+  output$reg_obs <- renderPlotly({
+    e <- resid(fit()); n <- length(e)
+    df <- data.frame(obs = seq_len(n), res = e)
+    df <- samp(df, 5000)
+    sg <- sd(e)
+    df$txt <- paste0("Observasi ke-", df$obs, "<br>Residual: ", fm(df$res, 3))
+    p <- ggplot(df, aes(obs, res)) +
+      geom_point(aes(text = txt), alpha = 0.35, color = PAL$teal, size = 1) +
+      geom_hline(yintercept = 0, color = PAL$navy) +
+      geom_hline(yintercept = c(-2 * sg, 2 * sg), color = PAL$rose, linetype = "dashed") +
+      labs(title = "Observasi vs Residual",
+           subtitle = "Garis putus-putus = +/- 2 simpangan baku",
+           x = "Urutan observasi", y = "Residual") +
+      theme_dash()
+    sp(ggplotly(p, tooltip = "text"))
+  })
+
+  output$reg_diag <- renderPlot({
+    m <- fit()
+    op <- par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3, 1), cex.main = 1.2, col.main = PAL$navy)
+    on.exit(par(op))
+    plot(m, which = c(1, 2, 3, 5), col = adjustcolor(PAL$teal, 0.35), pch = 16, cex = 0.5,
+         col.smooth = PAL$rose, lwd = 2, id.n = 3,
+         caption = list("Residual vs Fitted", "Normal Q-Q", "Scale-Location",
+                        "Cook's distance", "Residual vs Leverage"),
+         sub.caption = "")
   })
 
   output$reg_asm_text <- renderUI({
-    v <- vif_manual(fit()); b <- bp_res()
-    vmax <- if (is.null(v)) NA else max(v$VIF)
+    a <- asm()
+    st <- function(p) if (p >= ALPHA) "<b>terpenuhi</b>" else "<b>tidak terpenuhi</b>"
+    vtxt <- if (is.na(a$vmax)) "VIF tidak dihitung (hanya satu prediktor)."
+            else sprintf("VIF maksimum = %s, sehingga %s.", fm(a$vmax, 2),
+                         if (a$vmax < 5) "tidak ada indikasi multikolinearitas serius"
+                         else if (a$vmax < 10) "terdapat multikolinearitas moderat" else "terdapat multikolinearitas serius")
     div(class = "interp", HTML(sprintf(
-      "<ul>
-       <li><b>Linearitas &amp; homoskedastisitas</b> (Residual vs Fitted): sebaran residual yang acak di sekitar nol
-           dengan lebar konstan mengindikasikan asumsi terpenuhi; pola melengkung atau melebar (corong) menandakan
-           pelanggaran. Uji Breusch-Pagan nilai-p %s sehingga ragam sisaan <b>%s</b> homogen.</li>
-       <li><b>Normalitas residual</b> (Q-Q Plot): titik yang mengikuti garis merah berarti residual mendekati normal;
-           penyimpangan di ekor menandakan residual berekor tebal/miring. Dengan n besar, inferensi tetap
-           relatif andal berkat teorema limit pusat.</li>
-       <li><b>Multikolinearitas</b> (VIF): VIF maksimum = %s; %s (acuan umum VIF &lt; 5 atau &lt; 10).</li>
+      "<p>Semua keputusan memakai taraf nyata <b>alpha = 0.05</b> (tolak H0 jika nilai-p &lt; 0.05).</p>
+       <ul>
+       <li><b>Normalitas.</b> Shapiro-Wilk (nilai-p %s) dan Jarque-Bera (nilai-p %s): asumsi %s. Pada normal probability
+           plot, titik yang mengikuti garis menandakan residual normal; penyimpangan di ujung menandakan ekor yang lebih
+           tebal. Dengan n besar uji formal sangat sensitif sehingga mudah menolak H0, jadi nilai-p perlu dibaca bersama plot.</li>
+       <li><b>Autokorelasi.</b> Ljung-Box (nilai-p %s): asumsi %s; statistik Durbin-Watson = %s (mendekati 2 berarti tidak ada
+           autokorelasi). Pada ACF, batang yang keluar dari garis putus-putus menandakan autokorelasi signifikan. Catatan:
+           data ini cross-section (urutan baris bukan urutan waktu), sehingga uji ini bersifat pelengkap.</li>
+       <li><b>Homoskedastisitas.</b> Breusch-Pagan (nilai-p %s): asumsi %s. Pada plot observasi vs residual dan residual
+           vs fitted, sebaran yang membentuk corong (melebar/menyempit) menandakan heteroskedastisitas; sebaran acak dengan
+           lebar konstan menandakan ragam homogen. Garis merah pada Scale-Location yang mendatar mendukung ragam konstan.</li>
+       <li><b>Multikolinearitas.</b> %s</li>
+       <li><b>Plot diagnostik.</b> (1) Residual vs Fitted: garis merah mendatar di sekitar 0 berarti linear. (2) Normal Q-Q:
+           titik sepanjang garis berarti normal. (3) Scale-Location: garis mendatar berarti ragam konstan. (4) Residual vs
+           Leverage: titik di luar kontur Cook's distance adalah observasi berpengaruh yang perlu diperiksa.</li>
        </ul>",
-      fp(b$p), if (b$p < 0.05) "<u>tidak</u>" else "",
-      if (is.na(vmax)) "-" else fm(vmax, 2),
-      if (is.na(vmax)) "tidak dihitung" else if (vmax < 5) "tidak ada indikasi multikolinearitas serius"
-      else if (vmax < 10) "terdapat multikolinearitas moderat" else "terdapat multikolinearitas serius")))
+      fp(a$sw$p.value), fp(a$pjb), st(min(a$sw$p.value, a$pjb)),
+      fp(a$lb$p.value), st(a$lb$p.value), fm(a$dw, 3),
+      fp(a$bp$p), st(a$bp$p), vtxt)))
   })
 
   output$reg_av <- renderPlotly({
