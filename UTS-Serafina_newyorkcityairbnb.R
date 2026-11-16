@@ -12,13 +12,13 @@
 
 # ---- 1. Paket -------------------------------------------------------
 pkgs <- c("shiny", "shinydashboard", "readxl", "dplyr", "ggplot2",
-          "plotly", "DT", "leaflet")
+          "plotly", "DT", "GGally")
 for (p in pkgs) {
   if (!requireNamespace(p, quietly = TRUE)) install.packages(p)
 }
 suppressPackageStartupMessages({
   library(shiny); library(shinydashboard); library(readxl); library(dplyr)
-  library(ggplot2); library(plotly); library(DT); library(leaflet)
+  library(ggplot2); library(plotly); library(DT); library(GGally)
 })
 
 
@@ -340,8 +340,7 @@ ui <- dashboardPage(
                 <li>Mendeskripsikan karakteristik tiap variabel (numerik dan kategorik) secara univariat.</li>
                 <li>Mengeksplorasi hubungan antar pasangan variabel (bivariat) : numerik-numerik,
                     numerik-kategorik, dan kategorik-kategorik.</li>
-                <li>Mengeksplorasi pola gabungan tiga variabel atau lebih (peta spasial, bubble chart,
-                    heatmap, dan PCA).</li>
+                <li>Mengeksplorasi pola gabungan tiga variabel atau lebih (matriks korelasi dan scatter plot multivariat).</li>
                 <li>Membangun model regresi linear berganda dengan <i>price</i> sebagai respons untuk
                     mengetahui pengaruh prediktor.</li>
                 <li>Menyusun kesimpulan dan rekomendasi bagi host, calon tamu, dan pengelola platform.</li>
@@ -503,64 +502,42 @@ ui <- dashboardPage(
         kpi_row("mv"),
         tabBox(width = 12, id = "tab_mv",
 
-          tabPanel("A. Peta Spasial (lat, lon, tipe/harga)",
+          tabPanel("A. Matriks Korelasi",
             fluidRow(
               box(title = "Pengaturan", status = "info", solidHeader = TRUE, width = 3,
-                  radioButtons("map_col", "Warna titik berdasarkan",
-                               choices = c("Tipe kamar" = "room_type",
-                                           "Harga (kuantil)" = "price")),
-                  sliderInput("map_n", "Jumlah titik (sampel)", 500, 5000, 2500, step = 500),
-                  helpText("Melibatkan 3+ variabel: latitude, longitude, room_type / price, ",
-                           "neighbourhood (popup).")),
-              box(title = "Sebaran Spasial Listing", status = "primary", solidHeader = TRUE,
-                  width = 9, leafletOutput("mv_map", height = 480))
+                  checkboxGroupInput("mvc_vars", "Pilih variabel (minimal 3)",
+                                     choices = num_vars, selected = num_vars),
+                  radioButtons("mvc_method", "Metode korelasi",
+                               choices = c("Spearman" = "spearman", "Pearson" = "pearson")),
+                  selectInput("mvc_grp", "Hitung untuk",
+                              choices = c("Semua listing" = "all", levels(df0$room_type))),
+                  checkboxInput("mvc_lower", "Tampilkan segitiga bawah saja", TRUE),
+                  helpText("Arahkan kursor ke sel untuk melihat pasangan variabel dan nilai korelasinya.")),
+              box(title = "Matriks Korelasi Multivariat", status = "primary",
+                  solidHeader = TRUE, width = 9, plotlyOutput("mvc_plot", height = 520))
             ),
             fluidRow(box(title = "Interpretasi", status = "success", solidHeader = TRUE,
-                         width = 12, uiOutput("mv_map_text")))
+                         width = 12, uiOutput("mvc_text")))
           ),
 
-          tabPanel("B. Bubble Chart (4 variabel)",
+          tabPanel("B. Matriks Scatter Plot",
             fluidRow(
               box(title = "Pengaturan", status = "info", solidHeader = TRUE, width = 3,
-                  selectInput("mvb_x", "Sumbu X", choices = num4, selected = "availability_365"),
-                  selectInput("mvb_y", "Sumbu Y", choices = num4, selected = "price"),
-                  selectInput("mvb_s", "Ukuran gelembung", choices = num4,
-                              selected = "number_of_reviews"),
-                  checkboxInput("mvb_log", "Skala log (log1p) untuk X dan Y", TRUE),
-                  helpText("Warna = room_type. Sampel acak maks. 3.000 titik.")),
-              box(title = "Bubble Chart", status = "primary", solidHeader = TRUE,
-                  width = 9, plotlyOutput("mv_bubble", height = 470))
+                  checkboxGroupInput("mvs_vars", "Pilih variabel (minimal 3)",
+                                     choices = num_vars, selected = num4),
+                  radioButtons("mvs_method", "Metode korelasi (segitiga atas)",
+                               choices = c("Spearman" = "spearman", "Pearson" = "pearson")),
+                  radioButtons("mvs_col", "Warna titik",
+                               choices = c("Tanpa kelompok" = "none", "Tipe kamar" = "room_type")),
+                  checkboxInput("mvs_log", "Log1p untuk price, minimum_nights, number_of_reviews", TRUE),
+                  sliderInput("mvs_n", "Jumlah titik (sampel acak)", 500, 3000, 1500, step = 250),
+                  helpText("Diagonal = sebaran (density), segitiga atas = koefisien korelasi ",
+                           "(*** p<0.001, ** p<0.01, * p<0.05), segitiga bawah = scatter plot.")),
+              box(title = "Matriks Scatter Plot Antarvariabel", status = "primary",
+                  solidHeader = TRUE, width = 9, plotOutput("mvs_plot", height = 680))
             ),
             fluidRow(box(title = "Interpretasi", status = "success", solidHeader = TRUE,
-                         width = 12, uiOutput("mv_bubble_text")))
-          ),
-
-          tabPanel("C. Heatmap Median Harga",
-            fluidRow(
-              box(title = "Pengaturan", status = "info", solidHeader = TRUE, width = 3,
-                  sliderInput("mvh_top", "N neighbourhood terbanyak", 5, 25, 15),
-                  helpText("Median harga untuk kombinasi neighbourhood x room_type ",
-                           "(3 variabel: neighbourhood, room_type, price).")),
-              box(title = "Heatmap Median Harga", status = "primary", solidHeader = TRUE,
-                  width = 9, plotlyOutput("mv_heat", height = 480))
-            ),
-            fluidRow(box(title = "Interpretasi", status = "success", solidHeader = TRUE,
-                         width = 12, uiOutput("mv_heat_text")))
-          ),
-
-          tabPanel("D. PCA (Biplot)",
-            fluidRow(
-              box(title = "Pengaturan", status = "info", solidHeader = TRUE, width = 3,
-                  checkboxInput("pca_log", "Log-kan price, minimum_nights, number_of_reviews", TRUE),
-                  helpText("PCA dilakukan pada 6 variabel numerik yang telah distandarisasi."),
-                  tableOutput("pca_var")),
-              box(title = "Biplot PC1 vs PC2", status = "primary", solidHeader = TRUE,
-                  width = 5, plotlyOutput("pca_biplot", height = 430)),
-              box(title = "Scree Plot", status = "primary", solidHeader = TRUE,
-                  width = 4, plotlyOutput("pca_scree", height = 430))
-            ),
-            fluidRow(box(title = "Interpretasi", status = "success", solidHeader = TRUE,
-                         width = 12, uiOutput("pca_text")))
+                         width = 12, uiOutput("mvs_text")))
           )
         )
       ),
@@ -1089,185 +1066,125 @@ server <- function(input, output, session) {
   })
 
   # ================== MENU 4 : MULTIVARIAT ==================
-  output$mv_map <- renderLeaflet({
-    d <- samp(dat(), input$map_n)
-    popup <- paste0("<b>", d$neighbourhood, "</b><br>Tipe: ", d$room_type,
-                    "<br>Harga: $", d$price, "<br>Min. malam: ", d$minimum_nights)
-    if (input$map_col == "room_type") {
-      pal <- colorFactor(unname(col_room[levels(d$room_type)]), levels(d$room_type))
-      leaflet(d) %>% addProviderTiles("CartoDB.Positron") %>%
-        addCircleMarkers(~longitude, ~latitude, radius = 3, stroke = FALSE,
-                         fillOpacity = 0.6, color = ~pal(room_type), popup = popup) %>%
-        addLegend("bottomright", pal = pal, values = ~room_type, title = "Tipe kamar")
+  mvc_data <- reactive({
+    validate(need(length(input$mvc_vars) >= 3, "Pilih minimal 3 variabel."))
+    d <- dat()
+    if (input$mvc_grp != "all") d <- d[d$room_type == input$mvc_grp, ]
+    validate(need(nrow(d) > 10, "Data untuk kelompok ini terlalu sedikit / tipe kamar tidak ada di filter sidebar."))
+    as.data.frame(d[, input$mvc_vars])
+  })
+
+  output$mvc_plot <- renderPlotly({
+    d <- mvc_data(); v <- input$mvc_vars
+    cm <- round(cor(d, method = input$mvc_method), 3)
+    if (isTRUE(input$mvc_lower)) cm[upper.tri(cm)] <- NA
+    grid <- expand.grid(i = seq_along(v), j = seq_along(v))
+    grid <- grid[!is.na(cm[cbind(grid$i, grid$j)]), ]
+    annotations <- lapply(seq_len(nrow(grid)), function(k)
+      list(x = v[grid$j[k]], y = v[grid$i[k]],
+           text = sprintf("%.2f", cm[grid$i[k], grid$j[k]]),
+           showarrow = FALSE, font = list(color = PAL$navy, size = 13)))
+    grp <- if (input$mvc_grp == "all") "semua listing" else input$mvc_grp
+    plot_ly(x = v, y = v, z = cm, type = "heatmap", zmin = -1, zmax = 1,
+            colorscale = list(list(0, PAL$blue), list(0.5, PAL$cream), list(1, PAL$deeprose)),
+            hovertemplate = "%{y} vs %{x}<br>Korelasi: %{z}<extra></extra>") %>%
+      layout(title = list(text = paste0("<b>Matriks korelasi ", input$mvc_method, "</b> (",
+                                        grp, ", n = ", fm(nrow(d), 0), ")")),
+             yaxis = list(autorange = "reversed", title = ""),
+             xaxis = list(title = "", tickangle = -30),
+             annotations = annotations) %>%
+      sp()
+  })
+
+  output$mvc_text <- renderUI({
+    d <- mvc_data(); v <- input$mvc_vars
+    cm <- cor(d, method = input$mvc_method); diag(cm) <- NA
+    ix <- which(abs(cm) == max(abs(cm), na.rm = TRUE), arr.ind = TRUE)[1, ]
+    iw <- which(abs(cm) == min(abs(cm), na.rm = TRUE), arr.ind = TRUE)[1, ]
+    r1 <- cm[ix[1], ix[2]]; r2 <- cm[iw[1], iw[2]]
+    pr <- if ("price" %in% v && length(v) > 1) {
+      cp <- cm["price", setdiff(v, "price")]
+      t1 <- names(cp)[which.max(abs(cp))]
+      sprintf(" Variabel yang paling berkorelasi dengan <b>price</b> adalah <b>%s</b> (r = %s, hubungan %s dan %s).",
+              t1, fm(cp[t1], 3), if (cp[t1] > 0) "positif" else "negatif", cor_strength(cp[t1]))
+    } else ""
+    grp <- if (input$mvc_grp == "all") "seluruh listing" else paste("listing bertipe", input$mvc_grp)
+    div(class = "interp", HTML(sprintf(
+      "Matriks ini menampilkan korelasi (%s) antar <b>%d variabel</b> sekaligus pada %s. Pasangan dengan korelasi
+       <b>terkuat</b> adalah <b>%s</b> dan <b>%s</b> (r = %s; %s, %s), sedangkan yang <b>terlemah</b> adalah
+       <b>%s</b> dan <b>%s</b> (r = %s).%s Warna rose = korelasi positif, biru = negatif, krem = mendekati nol.
+       Coba ganti kelompok (tipe kamar) untuk melihat apakah struktur hubungan antar variabel berubah.
+       Korelasi bukan bukti sebab-akibat, dan korelasi tinggi antar prediktor perlu diwaspadai
+       (multikolinearitas) pada regresi.",
+      input$mvc_method, length(v), grp,
+      rownames(cm)[ix[1]], colnames(cm)[ix[2]], fm(r1, 3),
+      if (r1 > 0) "positif" else "negatif", cor_strength(r1),
+      rownames(cm)[iw[1]], colnames(cm)[iw[2]], fm(r2, 3), pr)))
+  })
+
+  mvs_df <- reactive({
+    validate(need(length(input$mvs_vars) >= 3, "Pilih minimal 3 variabel."))
+    d <- dat(); v <- input$mvs_vars
+    out <- as.data.frame(d[, v, drop = FALSE])
+    if (isTRUE(input$mvs_log)) {
+      for (nm in intersect(v, c("price", "minimum_nights", "number_of_reviews"))) {
+        out[[nm]] <- log1p(out[[nm]])
+        names(out)[names(out) == nm] <- paste0("log_", nm)
+      }
+    }
+    out$room_type <- d$room_type
+    out
+  })
+
+  output$mvs_plot <- renderPlot({
+    df <- samp(mvs_df(), input$mvs_n)
+    cols <- setdiff(names(df), "room_type")
+    ttl <- "Scatterplot Matrix Antarvariabel"
+    if (input$mvs_col == "room_type") {
+      g <- ggpairs(df, columns = cols,
+                   mapping = aes(color = room_type, fill = room_type),
+                   upper = list(continuous = wrap("cor", method = input$mvs_method, size = 3.6)),
+                   lower = list(continuous = wrap("points", alpha = 0.35, size = 0.7)),
+                   diag  = list(continuous = wrap("densityDiag", alpha = 0.45)),
+                   title = ttl, progress = FALSE) +
+        scale_color_manual(values = col_room) + scale_fill_manual(values = col_room)
     } else {
-      pal <- colorQuantile(c(PAL$mint, PAL$sand, "#E3B7BE", PAL$rose, PAL$deeprose), d$price, n = 5)
-      leaflet(d) %>% addProviderTiles("CartoDB.Positron") %>%
-        addCircleMarkers(~longitude, ~latitude, radius = 3, stroke = FALSE,
-                         fillOpacity = 0.7, color = ~pal(price), popup = popup) %>%
-        addLegend("bottomright", pal = pal, values = ~price, title = "Harga (kuantil)")
+      g <- ggpairs(df, columns = cols,
+                   upper = list(continuous = wrap("cor", method = input$mvs_method, size = 4, color = PAL$navy)),
+                   lower = list(continuous = wrap("points", alpha = 0.3, size = 0.7, color = PAL$teal)),
+                   diag  = list(continuous = wrap("densityDiag", fill = PAL$mint, color = PAL$blue)),
+                   title = ttl, progress = FALSE)
     }
+    g + theme(strip.background = element_rect(fill = PAL$lightblue),
+              strip.text = element_text(color = PAL$navy, face = "bold"),
+              axis.text = element_text(size = 7, color = PAL$navy),
+              plot.title = element_text(face = "bold", color = PAL$navy))
   })
 
-  output$mv_map_text <- renderUI({
-    d <- dat()
-    med <- tapply(d$price, d$room_type, median)
-    nb  <- d %>% group_by(neighbourhood) %>% summarise(n = n(), med = median(price), .groups = "drop") %>%
-      filter(n >= 30) %>% arrange(desc(med))
+  output$mvs_text <- renderUI({
+    df <- mvs_df(); cols <- setdiff(names(df), "room_type")
+    X <- df[, cols, drop = FALSE]
+    cm <- cor(X, method = input$mvs_method); diag(cm) <- NA
+    ix <- which(abs(cm) == max(abs(cm), na.rm = TRUE), arr.ind = TRUE)[1, ]
+    iw <- which(abs(cm) == min(abs(cm), na.rm = TRUE), arr.ind = TRUE)[1, ]
+    r1 <- cm[ix[1], ix[2]]; r2 <- cm[iw[1], iw[2]]
+    sk <- sapply(X, skew); miring <- names(sk)[abs(sk) > 1]
+    sk_txt <- if (length(miring))
+      sprintf("Diagonal memperlihatkan variabel dengan sebaran miring/tidak simetris (|skewness| > 1): <b>%s</b>.",
+              paste(miring, collapse = ", "))
+    else "Diagonal memperlihatkan sebaran variabel yang relatif simetris."
+    kel <- if (input$mvs_col == "room_type")
+      "Karena titik diwarnai menurut tipe kamar, perhatikan apakah kurva density dan awan titik tiap tipe saling terpisah; jika ya, tipe kamar membedakan karakter listing."
+    else ""
     div(class = "interp", HTML(sprintf(
-      "Peta memperlihatkan pola spasial listing berdasarkan koordinat. Titik terkonsentrasi pada kawasan
-       tertentu (kepadatan tinggi) dan sebagian kawasan jarang listing. Ubah warna ke <i>Harga (kuantil)</i>
-       untuk melihat apakah warna gelap (harga tinggi) mengelompok pada area tertentu, serta ke <i>Tipe kamar</i>
-       untuk melihat kawasan yang didominasi tipe tertentu. Median harga menurut tipe kamar: %s.
-       Neighbourhood dengan median harga tertinggi (min. 30 listing): <b>%s</b> ($%s). Klik titik untuk
-       melihat detail listing.",
-      paste(sprintf("%s = $%s", names(med), fm(med, 0)), collapse = "; "),
-      nb$neighbourhood[1], fm(nb$med[1], 0))))
-  })
-
-  output$mv_bubble <- renderPlotly({
-    d <- samp(dat(), 3000)
-    x <- d[[input$mvb_x]]; y <- d[[input$mvb_y]]
-    if (isTRUE(input$mvb_log)) { x <- log1p(x); y <- log1p(y) }
-    sz <- d[[input$mvb_s]]
-    tip <- paste0("<b>", d$neighbourhood, "</b><br>Tipe kamar: ", d$room_type,
-                  "<br>", input$mvb_x, ": ", fm(d[[input$mvb_x]], 0),
-                  "<br>", input$mvb_y, ": ", fm(d[[input$mvb_y]], 0),
-                  "<br>", input$mvb_s, " (ukuran): ", fm(sz, 0))
-    plot_ly(x = x, y = y, color = d$room_type, size = sz, sizes = c(4, 30), colors = col_room,
-            type = "scatter", mode = "markers",
-            marker = list(opacity = 0.5, sizemode = "diameter", line = list(width = 0.5, color = "#FFFFFF")),
-            text = tip, hoverinfo = "text") %>%
-      layout(title = list(text = paste0("<b>", input$mvb_y, " vs ", input$mvb_x,
-                                        "</b> (ukuran = ", input$mvb_s, ")")),
-             xaxis = list(title = if (isTRUE(input$mvb_log)) paste0("log(1+", input$mvb_x, ")") else input$mvb_x),
-             yaxis = list(title = if (isTRUE(input$mvb_log)) paste0("log(1+", input$mvb_y, ")") else input$mvb_y),
-             legend = list(title = list(text = "Tipe kamar"))) %>%
-      sp()
-  })
-
-  output$mv_bubble_text <- renderUI({
-    d <- dat()
-    zero <- mean(d$availability_365 == 0) * 100
-    div(class = "interp", HTML(sprintf(
-      "Grafik menggabungkan 4 variabel: dua sumbu, ukuran gelembung, dan warna tipe kamar. Amati apakah
-       satu warna (tipe kamar) berada pada posisi harga yang lebih tinggi/rendah, apakah gelembung besar
-       (listing dengan banyak ulasan) berkumpul pada rentang harga atau ketersediaan tertentu, dan apakah
-       terdapat kelompok titik yang terpisah. Catatan: %s%% listing memiliki availability_365 = 0
-       (tidak tersedia), sehingga terbentuk barisan titik pada sisi kiri grafik bila X = availability_365.",
-      fm(zero, 1))))
-  })
-
-  output$mv_heat <- renderPlotly({
-    d <- dat()
-    top <- names(sort(table(d$neighbourhood), decreasing = TRUE))[1:input$mvh_top]
-    tb <- d %>% filter(neighbourhood %in% top) %>%
-      group_by(neighbourhood, room_type) %>%
-      summarise(Median = median(price), N = n(), .groups = "drop")
-    p <- ggplot(tb, aes(x = room_type, y = neighbourhood, fill = Median,
-                        text = paste0(neighbourhood, " - ", room_type, "<br>Median: $", Median, "<br>N: ", N))) +
-      geom_tile(color = "white") +
-      geom_text(aes(label = Median), size = 3) +
-      scale_fill_gradient(low = PAL$cream, high = PAL$deeprose, name = "Median ($)") +
-      labs(title = "Median harga: neighbourhood x room_type", x = "Tipe kamar", y = "neighbourhood") +
-      theme_dash()
-    sp(ggplotly(p, tooltip = "text"))
-  })
-
-  output$mv_heat_text <- renderUI({
-    d <- dat()
-    top <- names(sort(table(d$neighbourhood), decreasing = TRUE))[1:input$mvh_top]
-    tb <- d %>% filter(neighbourhood %in% top) %>%
-      group_by(neighbourhood, room_type) %>%
-      summarise(Median = median(price), N = n(), .groups = "drop") %>% filter(N >= 10)
-    mx <- tb[which.max(tb$Median), ]; mn <- tb[which.min(tb$Median), ]
-    div(class = "interp", HTML(sprintf(
-      "Heatmap menunjukkan bahwa harga ditentukan oleh <b>kombinasi</b> lokasi dan tipe kamar (interaksi).
-       Dalam gambar ini (kombinasi dengan minimal 10 listing), median tertinggi adalah <b>%s - %s</b> ($%s)
-       dan terendah <b>%s - %s</b> ($%s). Pada setiap neighbourhood, warna cenderung makin pekat dari
-       baris kamar bersama/privat ke <i>Entire home/apt</i>, dan antar neighbourhood terlihat perbedaan
-       tingkat harga yang jelas. Sel kosong menandakan kombinasi tidak ada.",
-      mx$neighbourhood, mx$room_type, fm(mx$Median, 0),
-      mn$neighbourhood, mn$room_type, fm(mn$Median, 0))))
-  })
-
-  pca_obj <- reactive({
-    d <- dat()
-    lg <- isTRUE(input$pca_log)
-    X <- data.frame(
-      price = if (lg) log(d$price) else d$price,
-      minimum_nights = if (lg) log1p(d$minimum_nights) else d$minimum_nights,
-      number_of_reviews = if (lg) log1p(d$number_of_reviews) else d$number_of_reviews,
-      availability_365 = d$availability_365,
-      latitude = d$latitude, longitude = d$longitude)
-    list(p = prcomp(X, scale. = TRUE), room = d$room_type)
-  })
-
-  output$pca_var <- renderTable({
-    p <- pca_obj()$p
-    ve <- p$sdev^2 / sum(p$sdev^2)
-    data.frame(Komponen = paste0("PC", seq_along(ve)),
-               Varians_persen = round(ve * 100, 2),
-               Kumulatif_persen = round(cumsum(ve) * 100, 2))
-  })
-
-  output$pca_biplot <- renderPlotly({
-    o <- pca_obj(); p <- o$p
-    ve <- p$sdev^2 / sum(p$sdev^2)
-    sc <- data.frame(PC1 = p$x[, 1], PC2 = p$x[, 2], room_type = o$room)
-    sc <- samp(sc, 4000)
-    L <- as.data.frame(p$rotation[, 1:2]); L$var <- rownames(L)
-    k <- 0.85 * min(max(abs(sc$PC1)) / max(abs(L$PC1)), max(abs(sc$PC2)) / max(abs(L$PC2)))
-    pl <- plot_ly() %>%
-      add_markers(data = sc, x = ~PC1, y = ~PC2, color = ~room_type, colors = col_room,
-                  marker = list(size = 5, opacity = 0.4),
-                  text = ~paste0("Tipe kamar: ", room_type, "<br>PC1: ", round(PC1, 2),
-                                 "<br>PC2: ", round(PC2, 2)),
-                  hoverinfo = "text")
-    for (i in seq_len(nrow(L))) {
-      pl <- pl %>%
-        add_segments(x = 0, y = 0, xend = L$PC1[i] * k, yend = L$PC2[i] * k,
-                     line = list(color = PAL$navy, width = 2.5), showlegend = FALSE,
-                     text = paste0("<b>", L$var[i], "</b><br>Loading PC1: ", round(L$PC1[i], 3),
-                                   "<br>Loading PC2: ", round(L$PC2[i], 3)),
-                     hoverinfo = "text") %>%
-        add_annotations(x = L$PC1[i] * k * 1.1, y = L$PC2[i] * k * 1.1, text = L$var[i],
-                        showarrow = FALSE, font = list(color = PAL$deeprose, size = 12))
-    }
-    pl %>% layout(title = list(text = "<b>Biplot PCA</b>"),
-                  xaxis = list(title = sprintf("PC1 (%.1f%%)", ve[1] * 100)),
-                  yaxis = list(title = sprintf("PC2 (%.1f%%)", ve[2] * 100)),
-                  legend = list(title = list(text = "Tipe kamar"))) %>%
-      sp()
-  })
-
-  output$pca_scree <- renderPlotly({
-    p <- pca_obj()$p
-    ve <- p$sdev^2 / sum(p$sdev^2) * 100
-    pcs <- paste0("PC", seq_along(ve))
-    df <- data.frame(PC = factor(pcs, levels = pcs), ve = ve)
-    df$txt <- paste0("<b>", df$PC, "</b><br>Varians: ", fm(ve, 2), "%<br>Kumulatif: ",
-                     fm(cumsum(ve), 2), "%")
-    g <- ggplot(df, aes(PC, ve, text = txt, group = 1)) +
-      geom_col(fill = PAL$blue) + geom_line(color = PAL$rose) + geom_point(color = PAL$rose, size = 2) +
-      labs(title = "Scree plot", x = "Komponen utama", y = "Varians dijelaskan (%)") +
-      theme_dash()
-    sp(ggplotly(g, tooltip = "text"))
-  })
-
-  output$pca_text <- renderUI({
-    p <- pca_obj()$p
-    ve <- p$sdev^2 / sum(p$sdev^2) * 100
-    r1 <- p$rotation[, 1]; r2 <- p$rotation[, 2]
-    t1 <- names(sort(abs(r1), decreasing = TRUE))[1:2]
-    t2 <- names(sort(abs(r2), decreasing = TRUE))[1:2]
-    div(class = "interp", HTML(sprintf(
-      "PC1 menjelaskan <b>%s%%</b> dan PC2 <b>%s%%</b> varians (kumulatif <b>%s%%</b>). PC1 paling dipengaruhi
-       oleh <b>%s</b> dan <b>%s</b>; PC2 paling dipengaruhi oleh <b>%s</b> dan <b>%s</b>. Panah yang
-       searah menandakan variabel berkorelasi positif, berlawanan arah berkorelasi negatif, dan saling tegak
-       lurus hampir tidak berkorelasi. Sebaran titik per warna menunjukkan apakah tipe kamar membentuk
-       kelompok pada ruang komponen utama. Jika varians kumulatif dua komponen pertama rendah, variabel-variabel
-       ini relatif independen sehingga reduksi dimensi kurang efektif (lihat scree plot).",
-      fm(ve[1], 1), fm(ve[2], 1), fm(sum(ve[1:2]), 1), t1[1], t1[2], t2[1], t2[2])))
+      "Matriks ini menampilkan <b>%d variabel</b> sekaligus. Segitiga atas memuat koefisien korelasi (%s); pasangan
+       <b>terkuat</b> adalah <b>%s</b> dan <b>%s</b> (r = %s; %s, %s), sedangkan <b>terlemah</b> adalah <b>%s</b> dan
+       <b>%s</b> (r = %s). %s Segitiga bawah menunjukkan bentuk hubungan: awan titik yang menyempit
+       mengindikasikan hubungan kuat, sedangkan sebaran melebar atau menumpuk pada satu sisi menandakan hubungan lemah,
+       pencilan, atau pola non-linear. %s Korelasi bukan bukti sebab-akibat.",
+      length(cols), input$mvs_method, rownames(cm)[ix[1]], colnames(cm)[ix[2]], fm(r1, 3),
+      if (r1 > 0) "positif" else "negatif", cor_strength(r1),
+      rownames(cm)[iw[1]], colnames(cm)[iw[2]], fm(r2, 3), sk_txt, kel)))
   })
 
   # ================== MENU 5 : REGRESI ==================
@@ -1562,6 +1479,8 @@ server <- function(input, output, session) {
     sigv <- rownames(co)[co[, 4] < 0.05]
     pos <- rownames(co)[co[, 4] < 0.05 & co[, 1] > 0]
     neg <- rownames(co)[co[, 4] < 0.05 & co[, 1] < 0]
+    cmx <- cor(as.data.frame(d[, num_vars]), method = "spearman"); diag(cmx) <- NA
+    ix <- which(abs(cmx) == max(abs(cmx), na.rm = TRUE), arr.ind = TRUE)[1, ]
     div(
       p(tags$i("Catatan: angka di bawah mengikuti filter data aktif di sidebar; model memakai ln(price) dengan 6 prediktor (spesifikasi baku).")),
       tags$ol(
@@ -1577,9 +1496,8 @@ server <- function(input, output, session) {
           paste(sprintf("%s $%s", names(med), fm(med, 0)), collapse = ", "),
           nb$neighbourhood[1], fm(nb$med[1], 0),
           fm(rho[1], 3), fm(rho[2], 3), fm(rho[3], 3)))),
-        tags$li(HTML("<b>Multivariat.</b> Peta, bubble chart, heatmap, dan PCA menunjukkan bahwa harga dipengaruhi
-          kombinasi lokasi dan tipe kamar, serta terdapat kelompok listing dengan karakter berbeda (mis. listing tersedia
-          sepanjang tahun, listing tanpa ulasan).")),
+        tags$li(HTML(sprintf("<b>Multivariat.</b> Pada matriks korelasi 6 variabel numerik, pasangan dengan korelasi Spearman terkuat adalah <b>%s</b> dan <b>%s</b> (rho = %s). Matriks scatter plot memperlihatkan sebaran tiap variabel (diagonal), korelasi berpasangan (segitiga atas), dan pola sebaran titik (segitiga bawah), sehingga pasangan dengan korelasi kuat, pola non-linear, maupun pencilan dapat dikenali sekaligus.",
+          rownames(cmx)[ix[1]], colnames(cmx)[ix[2]], fm(cmx[ix[1], ix[2]], 3)))),
         tags$li(HTML(sprintf("<b>Regresi berganda.</b> Model ln(price) memiliki R<sup>2</sup> = %s (adj. R<sup>2</sup> = %s) dan
           signifikan secara simultan (uji F, nilai-p %s). Prediktor signifikan (&alpha; = 5%%): %s. Prediktor berkoefisien positif: %s;
           negatif: %s. Daya jelas model tergolong %s sehingga masih banyak faktor lain yang menentukan harga.",
